@@ -1,0 +1,14 @@
+path: ../drive/MyDrive/Datasets2/weapons2
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 2
+names: ['Gun', 'Hand']
+
+roboflow:
+  workspace: test-mavenir
+  project: weapondata
+  version: 3
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/test-mavenir/weapondata/dataset/3
