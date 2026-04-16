@@ -3,63 +3,97 @@ import time
 import cv2
 import cvzone
 import smtplib
+from pathlib import Path
 from ultralytics import YOLO
+from groq import Groq
 from dotenv import load_dotenv
 from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from transformers import pipeline   # ✅ CHANGED (Hugging Face)
 
 # ---------------- LOAD ENV ---------------- #
-load_dotenv()
+load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASS = os.getenv("EMAIL_PASS")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# ---------------- FREE LLM (Hugging Face) ---------------- #
-print("Loading FREE LLM model... (first run may take time)")
-generator = pipeline("text-generation", model="gpt2")
+print("✅ GROQ KEY loaded:", bool(GROQ_API_KEY))
 
+client = Groq(api_key=GROQ_API_KEY)
+
+# ---------------- LLM FUNCTION (Groq) ---------------- #
 def generate_alert_with_llm(object_name, confidence):
-    try:
-        # 🔥 Get current date & time
-        now = datetime.now()
-        date = now.strftime("%Y-%m-%d")
-        time_now = now.strftime("%H:%M:%S")
+    now = datetime.now()
+    date = now.strftime("%Y-%m-%d")
+    time_now = now.strftime("%H:%M:%S")
 
-        # 🔥 Threat logic
-        if object_name.lower() == "gun":
-            level = "HIGH"
-            action = "Call security immediately."
-        elif object_name.lower() == "knife":
-            level = "MEDIUM"
-            action = "Monitor closely and alert authorities if needed."
-        else:
-            level = "LOW"
-            action = "No immediate threat. Continue monitoring."
+    prompt = f"""
+You are an AI-based smart surveillance system.
 
-        # ✅ FINAL CLEAN ALERT
-        return f"""
-🚨 Smart Surveillance Alert
+A suspicious object has been detected by our security cameras.
 
+Object Detected: {object_name}
+Detection Confidence: {confidence*100:.2f}%
 Date: {date}
 Time: {time_now}
 
+Your task:
+- Analyze the threat level realistically (HIGH / MEDIUM / LOW)
+- Explain why this object is dangerous in this context
+- Write a professional security alert message
+- Suggest immediate action for security personnel
+
+Be specific, realistic, and professional. Do NOT be generic.
+    """
+
+    try:
+        print("🔍 Calling Groq LLM...")
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        llm_message = response.choices[0].message.content
+        print("✅ LLM response received!")
+
+        return f"""
+🚨 SMART SURVEILLANCE ALERT 🚨
+
+Date: {date}
+Time: {time_now}
+Object: {object_name}
+Confidence: {confidence*100:.2f}%
+
+--- AI ANALYSIS ---
+{llm_message}
+"""
+
+    except Exception as e:
+        print("❌ LLM error:", e)
+
+        if object_name.lower() == "gun":
+            level = "HIGH"
+            action = "Call security immediately. Evacuate the area."
+        elif object_name.lower() == "knife":
+            level = "MEDIUM"
+            action = "Alert nearby personnel. Monitor closely."
+        else:
+            level = "LOW"
+            action = "Continue monitoring the area."
+
+        return f"""
+🚨 SMART SURVEILLANCE ALERT 🚨
+
+Date: {date}
+Time: {time_now}
 Object: {object_name}
 Confidence: {confidence*100:.2f}%
 
 Threat Level: {level}
-
-Message:
-A {object_name} has been detected with {confidence*100:.2f}% confidence.
-
-Action:
-{action}
+Message: A {object_name} has been detected on camera.
+Action: {action}
 """
-
-    except Exception as e:
-        print("Alert Error:", e)
-        return f"{object_name} detected"
 
 # ---------------- EMAIL FUNCTION ---------------- #
 def send_email_alert(body):
@@ -76,18 +110,11 @@ def send_email_alert(body):
             server.send_message(msg)
             print("✅ Email sent!")
     except Exception as e:
-        print(f"❌ Email error: {e}")
+        print("❌ Email error:", e)
 
 # ---------------- LOAD MODELS ---------------- #
 model_general = YOLO("Yolo-Weights/yolov8n.pt")
 model_weapon = YOLO("yolo-weights/guns8n.pt")
-
-# ---------------- CLASSES ---------------- #
-classNames_general = [
-    "person","bicycle","car","motorbike","bus","train","truck","boat",
-    "traffic light","fire hydrant","stop sign","bench","bird","cat",
-    "dog","horse","sheep","cow","elephant","bear","zebra","giraffe"
-]
 
 weapon_classes = ["Gun", "knife"]
 
@@ -115,12 +142,9 @@ while True:
             conf = float(box.conf[0])
             cls = int(box.cls[0])
 
-            if cls < len(classNames_general):
-                class_name = classNames_general[cls]
-
-                cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
-                cvzone.putTextRect(img, f'{class_name} {conf:.2f}',
-                                   (max(0, x1), max(35, y1)))
+            cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
+            cvzone.putTextRect(img, f'{cls} {conf:.2f}',
+                               (max(0, x1), max(35, y1)))
 
     # -------- WEAPON DETECTION -------- #
     results_weapon = model_weapon(img, stream=True)
@@ -138,7 +162,7 @@ while True:
                                (max(0, x1), max(35, y1)),
                                scale=1, thickness=2)
 
-            # -------- FREE LLM + EMAIL -------- #
+            # -------- LLM + EMAIL -------- #
             if conf > 0.6 and time.time() - last_email_time > EMAIL_INTERVAL:
                 alert_text = generate_alert_with_llm(class_name, conf)
                 send_email_alert(alert_text)
@@ -151,7 +175,7 @@ while True:
     cv2.putText(img, f'FPS: {int(fps)}', (20, 50),
                 cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-    cv2.imshow("🔥 Smart Surveillance (FREE LLM)", img)
+    cv2.imshow("🔥 Smart Surveillance (Groq LLM)", img)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
